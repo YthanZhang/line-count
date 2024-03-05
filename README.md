@@ -15,13 +15,12 @@ Count lines of all files in group of directories recursively
 line-count /dir/a /dir/b /dir/c
 ```
 
-Filter files to count by file name. This regex only match file name, not full directory
+Filter files to count. This regex only match file name, not full directory
 ```shell
-line-count . -r  "(\.(rs|md|toml))$"
+line-count . -r "(\.(rs|md|toml))$"
 ```
 
-# TODO
-
-+ Make the process multithreaded
-
-
+Filter files to count with negative filter. Matched files are skipped
+```shell
+line-count . -r "(\.(rs|md|toml))$" --regex-not
+```
