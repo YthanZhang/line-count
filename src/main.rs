@@ -9,20 +9,36 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let regex = regex::Regex::new(&args.regex_string).wrap_err(format!(
-        "\"{}\" is not a valid regex pattern",
-        args.regex_string
-    ))?;
+    let line_count = args
+        .paths
+        .iter()
+        .map(|path| {
+            if path.is_file() {
+                std::fs::File::open(path)
+                    .map(|file| std::io::BufReader::new(file).lines().count())
+                    .wrap_err_with(|| format!("Failed to open \"{path:?}\""))
+            } else {
+                let regex = regex::Regex::new(&args.regex_string).wrap_err_with(|| {
+                    format!("\"{}\" is not a valid regex pattern", args.regex_string)
+                })?;
 
-    let files = if args.no_recurse {
-        glob(&args.dir, &regex)
-    } else {
-        glob_recursive(&args.dir, &regex)
-    }?;
+                let files = if args.no_recurse {
+                    glob(path, &regex)
+                } else {
+                    glob_recursive(path, &regex)
+                }?;
 
-    let line_count = files.iter().try_fold(0, |acc, path| {
-        std::fs::File::open(path).map(|file| acc + std::io::BufReader::new(file).lines().count())
-    })?;
+                files
+                    .iter()
+                    .try_fold(0, |acc, path| {
+                        std::fs::File::open(path)
+                            .map(|file| acc + std::io::BufReader::new(file).lines().count())
+                    })
+                    .wrap_err_with(|| format!("Failed to open {path:?}"))
+            }
+        })
+        .sum::<Result<usize>>()
+        .wrap_err("Failed to count lines")?;
 
     println!("{line_count}");
 
@@ -56,7 +72,10 @@ fn glob(path: &Path, regex: &regex::Regex) -> Result<Vec<PathBuf>> {
 
 fn glob_recursive(path: &Path, regex: &regex::Regex) -> Result<Vec<PathBuf>> {
     let mut result = Vec::new();
-    for dir_entry in path.read_dir()? {
+    for dir_entry in path
+        .read_dir()
+        .wrap_err_with(|| format!("Failed to read directory {path:?}"))?
+    {
         let dir_entry = dir_entry?;
         let metadata = dir_entry.metadata()?;
 
@@ -86,7 +105,8 @@ fn glob_recursive(path: &Path, regex: &regex::Regex) -> Result<Vec<PathBuf>> {
 #[command(version, about)]
 struct Args {
     /// Directory to search for files
-    dir: PathBuf,
+    #[arg(num_args = 1..)]
+    paths: Vec<PathBuf>,
 
     /// Set for non-recursive search
     #[arg(long, action)]
