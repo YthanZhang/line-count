@@ -1,13 +1,16 @@
+mod args;
+
 use clap::Parser;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::{eyre::WrapErr, Report, Result};
+use rayon::prelude::*;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 fn main() -> Result<()> {
     color_eyre::install()?;
 
-    let args = Args::parse();
+    let args = args::Args::parse();
 
     let line_count = args
         .paths
@@ -23,17 +26,25 @@ fn main() -> Result<()> {
                 })?;
 
                 let files = if args.no_recurse {
-                    glob(path, &regex)
+                    glob(path, &regex, args.regex_not)
                 } else {
-                    glob_recursive(path, &regex)
+                    glob_recursive(path, &regex, args.regex_not)
                 }?;
 
                 files
-                    .iter()
-                    .try_fold(0, |acc, path| {
-                        std::fs::File::open(path)
-                            .map(|file| acc + std::io::BufReader::new(file).lines().count())
-                    })
+                    .par_iter()
+                    .try_fold(
+                        || 0,
+                        |acc, path| {
+                            std::fs::File::open(path)
+                                .map(|file| acc + std::io::BufReader::new(file).lines().count())
+                                .wrap_err(format!("Failed to read file {path:?}"))
+                        },
+                    )
+                    .try_reduce(
+                        || 0,
+                        |a, b| usize::checked_add(a, b).wrap_err("Line count overflowed"),
+                    )
                     .wrap_err_with(|| format!("Failed to open {path:?}"))
             }
         })
@@ -48,7 +59,7 @@ fn main() -> Result<()> {
 const FILE_NAME_REGEX_STR_CONV_FAIL: &str =
     "Failed to convert file name to UTF-8 string, cannot complete regex match";
 
-fn glob(path: &Path, regex: &regex::Regex) -> Result<Vec<PathBuf>> {
+fn glob(path: &Path, regex: &regex::Regex, regex_not: bool) -> Result<Vec<PathBuf>> {
     let mut result = Vec::new();
 
     for dir_entry in std::fs::read_dir(path)? {
@@ -56,12 +67,13 @@ fn glob(path: &Path, regex: &regex::Regex) -> Result<Vec<PathBuf>> {
         let metadata = dir_entry.metadata()?;
 
         if metadata.is_file()
-            && regex.is_match(
-                dir_entry
-                    .file_name()
-                    .to_str()
-                    .wrap_err(FILE_NAME_REGEX_STR_CONV_FAIL)?,
-            )
+            && regex_not
+                != regex.is_match(
+                    dir_entry
+                        .file_name()
+                        .to_str()
+                        .wrap_err(FILE_NAME_REGEX_STR_CONV_FAIL)?,
+                )
         {
             result.push(dir_entry.path())
         }
@@ -70,8 +82,10 @@ fn glob(path: &Path, regex: &regex::Regex) -> Result<Vec<PathBuf>> {
     Ok(result)
 }
 
-fn glob_recursive(path: &Path, regex: &regex::Regex) -> Result<Vec<PathBuf>> {
-    let mut result = Vec::new();
+fn glob_recursive(path: &Path, regex: &regex::Regex, regex_not: bool) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut directories = Vec::new();
+
     for dir_entry in path
         .read_dir()
         .wrap_err_with(|| format!("Failed to read directory {path:?}"))?
@@ -80,41 +94,44 @@ fn glob_recursive(path: &Path, regex: &regex::Regex) -> Result<Vec<PathBuf>> {
         let metadata = dir_entry.metadata()?;
 
         if metadata.is_file() {
-            if regex.is_match(
+            if regex_not
+                != regex.is_match(
+                    dir_entry
+                        .file_name()
+                        .to_str()
+                        .wrap_err(FILE_NAME_REGEX_STR_CONV_FAIL)?,
+                )
+            {
+                files.push(dir_entry.path());
+            }
+        } else if metadata.is_dir() {
+            directories.push(dir_entry.path());
+        } else if regex_not
+            != regex.is_match(
                 dir_entry
                     .file_name()
                     .to_str()
                     .wrap_err(FILE_NAME_REGEX_STR_CONV_FAIL)?,
-            ) {
-                result.push(dir_entry.path());
-            }
-        } else if metadata.is_dir() {
-            result.append(&mut glob_recursive(&dir_entry.path(), regex)?);
-        } else {
-            return Err(Report::msg(
-                "Found object in directory that is neither file or directory",
-            ));
+            )
+        {
+            return Err(Report::msg(format!(
+                "{:?} is neither file or directory",
+                dir_entry.path()
+            )));
         }
     }
 
-    Ok(result)
-}
+    files.append(
+        &mut directories
+            .par_iter()
+            .flat_map(|path| match glob_recursive(path, regex, regex_not) {
+                Ok(paths) => paths.into_iter().map(Ok).collect(),
+                Err(e) => {
+                    vec![Err(e)]
+                }
+            })
+            .collect::<Result<Vec<PathBuf>>>()?,
+    );
 
-/// A single file line counter program
-#[derive(Parser, Debug)]
-#[command(version, about)]
-struct Args {
-    /// Directories to search for files
-    #[arg(num_args = 1..)]
-    paths: Vec<PathBuf>,
-
-    /// Set for non-recursive search
-    #[arg(long, action)]
-    no_recurse: bool,
-
-    /// File name pattern to match, regex expression. Default match all.
-    /// Match file extension: `(\.txt)$` matches `*.txt` files.
-    /// Match multiple file extensions: `(\.(txt|html))$` matches `*.txt` and `*.html` files.
-    #[arg(short = 'r', long = "regex", default_value = ".*")]
-    regex_string: String,
+    Ok(files)
 }
