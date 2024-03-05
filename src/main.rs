@@ -104,7 +104,7 @@ fn glob_recursive(path: &Path, regex: &regex::Regex) -> Result<Vec<PathBuf>> {
 #[derive(Parser, Debug)]
 #[command(version, about)]
 struct Args {
-    /// Directory to search for files
+    /// Directories to search for files
     #[arg(num_args = 1..)]
     paths: Vec<PathBuf>,
 
@@ -112,8 +112,7 @@ struct Args {
     #[arg(long, action)]
     no_recurse: bool,
 
-    /// File name pattern to match, regex expression.
-    /// Match all (default): `.*`.
+    /// File name pattern to match, regex expression. Default match all.
     /// Match file extension: `(\.txt)$` matches `*.txt` files.
     /// Match multiple file extensions: `(\.(txt|html))$` matches `*.txt` and `*.html` files.
     #[arg(short = 'r', long = "regex", default_value = ".*")]
