@@ -12,12 +12,12 @@ fn main() -> Result<()> {
 
     let args = args::Args::parse();
 
-    println!("{}", get_line_count(args)?);
+    println!("{}", get_line_count(&args)?);
 
     Ok(())
 }
 
-fn get_line_count(args: args::Args) -> Result<usize> {
+fn get_line_count(args: &args::Args) -> Result<usize> {
     args.paths
         .iter()
         .map(|path| {
@@ -145,4 +145,50 @@ fn glob_recursive(path: PathBuf, regex: &regex::Regex, regex_not: bool) -> Resul
     }
 
     Ok(files)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_glob() {
+        let mut args = args::Args {
+            paths: vec![PathBuf::from("./test")],
+            no_recurse: true,
+            regex_string: ".*".to_string(),
+            regex_not: false,
+        };
+
+        assert_eq!(get_line_count(&args).unwrap(), 532);
+
+        args.paths = vec![
+            PathBuf::from("./test"),
+            PathBuf::from("./test/.a/Cargo.lock"),
+            PathBuf::from("./test/b/"),
+        ];
+        args.regex_string = "(\\.lock)$".to_string();
+        assert_eq!(get_line_count(&args).unwrap(), 532 * 2);
+
+        // only globed files get regex check, file path doesn't
+        args.regex_not = true;
+        assert_eq!(get_line_count(&args).unwrap(), 532 + 1 + 14);
+    }
+
+    #[test]
+    fn test_glob_recurse() {
+        let mut args = args::Args {
+            paths: vec![PathBuf::from("./test")],
+            no_recurse: false,
+            regex_string: ".*".to_string(),
+            regex_not: false,
+        };
+        assert_eq!(get_line_count(&args).unwrap(), 532 * 2 + 1 + 14);
+
+        args.regex_string = "(\\.lock)$".to_string();
+        assert_eq!(get_line_count(&args).unwrap(), 532 * 2);
+
+        args.regex_not = true;
+        assert_eq!(get_line_count(&args).unwrap(), 1 + 14);
+    }
 }
