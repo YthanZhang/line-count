@@ -12,8 +12,13 @@ fn main() -> Result<()> {
 
     let args = args::Args::parse();
 
-    let line_count = args
-        .paths
+    println!("{}", get_line_count(args)?);
+
+    Ok(())
+}
+
+fn get_line_count(args: args::Args) -> Result<usize> {
+    args.paths
         .iter()
         .map(|path| {
             if path.is_file() {
@@ -28,7 +33,7 @@ fn main() -> Result<()> {
                 let files = if args.no_recurse {
                     glob(path, &regex, args.regex_not)
                 } else {
-                    glob_recursive(path, &regex, args.regex_not)
+                    glob_recursive(path.to_owned(), &regex, args.regex_not)
                 }?;
 
                 files
@@ -49,11 +54,7 @@ fn main() -> Result<()> {
             }
         })
         .sum::<Result<usize>>()
-        .wrap_err("Failed to count lines")?;
-
-    println!("{line_count}");
-
-    Ok(())
+        .wrap_err("Failed to count lines")
 }
 
 const FILE_NAME_REGEX_STR_CONV_FAIL: &str =
@@ -82,19 +83,36 @@ fn glob(path: &Path, regex: &regex::Regex, regex_not: bool) -> Result<Vec<PathBu
     Ok(result)
 }
 
-fn glob_recursive(path: &Path, regex: &regex::Regex, regex_not: bool) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    let mut directories = Vec::new();
+fn glob_recursive(path: PathBuf, regex: &regex::Regex, regex_not: bool) -> Result<Vec<PathBuf>> {
+    fn glob_split(
+        path: &Path,
+        regex: &regex::Regex,
+        regex_not: bool,
+    ) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+        let mut files = Vec::new();
+        let mut directories = Vec::new();
 
-    for dir_entry in path
-        .read_dir()
-        .wrap_err_with(|| format!("Failed to read directory {path:?}"))?
-    {
-        let dir_entry = dir_entry?;
-        let metadata = dir_entry.metadata()?;
+        for dir_entry in path
+            .read_dir()
+            .wrap_err_with(|| format!("Failed to read directory {path:?}"))?
+        {
+            let dir_entry = dir_entry?;
+            let metadata = dir_entry.metadata()?;
 
-        if metadata.is_file() {
-            if regex_not
+            if metadata.is_file() {
+                if regex_not
+                    != regex.is_match(
+                        dir_entry
+                            .file_name()
+                            .to_str()
+                            .wrap_err(FILE_NAME_REGEX_STR_CONV_FAIL)?,
+                    )
+                {
+                    files.push(dir_entry.path());
+                }
+            } else if metadata.is_dir() {
+                directories.push(dir_entry.path());
+            } else if regex_not
                 != regex.is_match(
                     dir_entry
                         .file_name()
@@ -102,36 +120,29 @@ fn glob_recursive(path: &Path, regex: &regex::Regex, regex_not: bool) -> Result<
                         .wrap_err(FILE_NAME_REGEX_STR_CONV_FAIL)?,
                 )
             {
-                files.push(dir_entry.path());
+                return Err(Report::msg(format!(
+                    "{:?} is neither file or directory",
+                    dir_entry.path()
+                )));
             }
-        } else if metadata.is_dir() {
-            directories.push(dir_entry.path());
-        } else if regex_not
-            != regex.is_match(
-                dir_entry
-                    .file_name()
-                    .to_str()
-                    .wrap_err(FILE_NAME_REGEX_STR_CONV_FAIL)?,
-            )
-        {
-            return Err(Report::msg(format!(
-                "{:?} is neither file or directory",
-                dir_entry.path()
-            )));
         }
+
+        Ok((files, directories))
     }
 
-    files.append(
-        &mut directories
-            .par_iter()
-            .flat_map(|path| match glob_recursive(path, regex, regex_not) {
-                Ok(paths) => paths.into_iter().map(Ok).collect(),
-                Err(e) => {
-                    vec![Err(e)]
-                }
-            })
-            .collect::<Result<Vec<PathBuf>>>()?,
-    );
+    let mut directories = vec![vec![path]];
+    let mut files = vec![];
+
+    while !directories.is_empty() {
+        let (new_files, dirs): (Vec<Vec<PathBuf>>, Vec<Vec<PathBuf>>) = directories
+            .into_par_iter()
+            .flatten()
+            .map(|path| glob_split(&path, regex, regex_not))
+            .collect::<Result<_>>()?;
+
+        files.extend(new_files.into_iter().flatten());
+        directories = dirs;
+    }
 
     Ok(files)
 }
