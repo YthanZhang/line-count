@@ -12,3 +12,6 @@ clap = { version = "4.5.1", features = ["derive"] }
 regex = "1.10.3"
 
 rayon = "1.9.0"
+
+[profile.release]
+lto = true

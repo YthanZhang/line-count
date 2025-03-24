@@ -12,7 +12,9 @@ fn main() -> Result<()> {
 
     let args = args::Args::parse();
 
-    println!("{}", get_line_count(&args)?);
+    let lines = get_line_count(&args)?;
+
+    println!("{lines}");
 
     Ok(())
 }
@@ -130,18 +132,17 @@ fn glob_recursive(path: PathBuf, regex: &regex::Regex, regex_not: bool) -> Resul
         Ok((files, directories))
     }
 
-    let mut directories = vec![vec![path]];
+    let mut directories = vec![path];
     let mut files = vec![];
 
     while !directories.is_empty() {
         let (new_files, dirs): (Vec<Vec<PathBuf>>, Vec<Vec<PathBuf>>) = directories
             .into_par_iter()
-            .flatten()
             .map(|path| glob_split(&path, regex, regex_not))
             .collect::<Result<_>>()?;
 
         files.extend(new_files.into_iter().flatten());
-        directories = dirs;
+        directories = dirs.into_iter().flatten().collect();
     }
 
     Ok(files)
